@@ -1,0 +1,124 @@
+Java 语言介绍
+========================================
+
+一、概述
+--------
+Java 是一种通用的、面向对象的高级程序设计语言，由 Sun Microsystems 公司的
+James Gosling（被称为 "Java 之父"）带领团队开发，1995 年正式公开发布。
+2010 年 Oracle（甲骨文）公司收购 Sun 后，Java 归 Oracle 所有，现由 Oracle
+与社区（OpenJDK）共同维护。
+
+Java 的设计目标是"一次编写，到处运行"（Write Once, Run Anywhere），其核心
+手段是把源代码编译成与平台无关的字节码（bytecode），再由各操作系统上的
+JVM（Java Virtual Machine，Java 虚拟机）解释或即时编译执行。
+
+
+二、主要特点
+------------
+1. 平台无关性
+   源码编译为 .class 字节码，依赖 JVM 屏蔽底层操作系统与硬件差异。
+
+2. 面向对象
+   支持封装、继承、多态，类与接口是程序的基本组织单元
+   （注：Java 不支持类的多继承，但接口可以多实现）。
+
+3. 自动内存管理与垃圾回收
+   无需手动释放内存，由 GC（如 G1、ZGC、Shenandoah）回收无用对象，
+   降低了内存泄漏和悬垂指针的风险。
+
+4. 安全性
+   类加载校验、字节码验证、安全管理器、异常与访问控制机制，
+   适合网络与分布式环境。
+
+5. 强类型与丰富异常处理机制
+   编译期类型检查严格，受检异常（checked exception）强制调用方处理。
+
+6. 多线程与并发支持
+   语言层面内置线程，java.util.concurrent 提供线程池、原子类、
+   并发集合等成熟工具；虚拟线程（Virtual Threads，JDK 21 正式可用）
+   进一步降低了高并发编程成本。
+
+7. 庞大的生态与标准库
+   丰富的类库、成熟的构建工具（Maven、Gradle）、
+   以及 Spring、Jakarta EE、Netty、Kafka 等框架与中间件。
+
+
+三、运行原理（简化流程）
+------------------------
+   .java 源文件
+        |  javac 编译
+        v
+   .class 字节码
+        |  类加载器加载 + 字节码校验
+        v
+        JVM  ——> 解释器 / JIT（C1、C2）即时编译 ——> 本地机器码执行
+                    |
+                 运行时数据区：堆、方法区/元空间、栈、程序计数器等
+
+
+四、发展历程与版本
+------------------
+- 1995  JDK 1.0        首次发布，Applet 兴起
+- 1998  JDK 1.2 (Java 2)  引入集合框架、Swing，J2EE/J2ME 平台划分
+- 2004  Java 5 (1.5)   泛型、枚举、注解、自动装箱、可变参数、for-each
+- 2011  Java 7         try-with-resources、NIO.2、switch 支持字符串
+- 2014  Java 8         Lambda 表达式、Stream API、Optional、新的日期时间 API
+- 2017  Java 9         模块化系统（JPMS）、JShell、私有接口方法
+- 2018  Java 11        长期支持版（LTS），var 局部变量类型推断（Java 10 引入）
+- 2021  Java 17        LTS，密封类、模式匹配（switch）、Records（Java 16）
+- 2023  Java 21        LTS，虚拟线程、序列集合、Record 模式、分步模式匹配
+- 之后 JDK 每 6 个月发布一个特性版本，每 2 年（自 Java 21 起）发布一个 LTS 版本
+
+说明：自 Java 9 起，Java 采用每 6 个月一次的快速发布节奏；
+Oracle JDK 转为商业订阅许可，社区可使用免费的 OpenJDK 构建版
+（如 Temurin、Amazon Corretto、Alibaba Dragonwell、GraalVM 等）。
+
+
+五、语法示例：Hello World
+-------------------------
+public class HelloWorld {
+    public static void main(String[] args) {
+        System.out.println("Hello, World!");
+    }
+}
+
+编译与运行：
+    javac HelloWorld.java
+    java HelloWorld
+
+
+六、应用领域
+------------
+1. 企业级后端服务：金融、电商、电信等系统，Spring Boot / Spring Cloud 微服务
+2. Android 应用开发（Kotlin 现为主推语言，但底层 API 仍是 Java）
+3. 大数据与分布式系统：Hadoop、Spark、Flink、Kafka、Elasticsearch
+4. 中间件与服务器：Tomcat、WildFly、Netty、Dubbo、gRPC
+5. 桌面与嵌入式：JavaFX、IDE（Eclipse、IntelliJ IDEA）、卡类与物联网设备
+6. 科学计算与高性能：借助 Project Loom、Panama（Foreign Function & Memory API）
+   以及 Scala/Kotlin/Groovy 等 JVM 语言扩展能力
+
+
+七、优缺点小结
+--------------
+优点：生态成熟、跨平台、稳定可靠、性能优秀、并发与内存管理能力强、
+      向后兼容性极好、人才储备充足。
+
+缺点：语法相对冗长（虽已逐步改善）、冷启动与内存占用偏高、
+      不适合直接编写对底层硬件控制要求极高的程序（如操作系统、驱动），
+      在脚本化与简洁性上弱于 Python 等语言；针对这些问题，
+      GraalVM 原生镜像、Valhalla（值类型）、Leyden（启动加速）等项目
+      正在持续改进。
+
+
+八、学习建议
+------------
+1. 掌握基础语法与面向对象、集合、异常、IO、并发等核心 API
+2. 理解 JVM 内存模型与垃圾回收原理，具备性能调优意识
+3. 熟练使用 Maven/Gradle 与 IDE（IntelliJ IDEA）
+4. 学习 Spring Boot、数据库（JDBC/MyBatis/JPA）、REST、消息队列等工程技能
+5. 阅读 OpenJDK 源码与设计规范（JLS、JEP），跟进新版本特性
+
+
+（本文档内容基于编写者已有知识整理，未联网核实；版本与特性细节
+  建议以 Oracle 官方文档 https://docs.oracle.com/java/ 与
+  OpenJDK https://openjdk.org/ 为准。）
