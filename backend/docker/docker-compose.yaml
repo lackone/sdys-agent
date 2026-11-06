@@ -1,0 +1,247 @@
+# =============================================================================
+# RAGFlow 全家桶 Docker Compose 配置（自包含单文件版本）
+# -----------------------------------------------------------------------------
+# 说明：
+#   1. 官方 RAGFlow 的 docker-compose.yml 默认会把个人配置放在 docker/.env 中，
+#      并通过 ${VAR} 语法引用。为保证本文件可以独立运行、不依赖外部环境变量文件，
+#      这里把所有参数（密码、端口、镜像版本）都以默认值形式内联写死。
+#   2. 生产环境建议把敏感项（MySQL 密码、MinIO 密码等）改为 ${VAR} 并放到 .env。
+#   3. 本文件包含 5 个服务：
+#        ragflow        : RAGFlow 主服务（Web 前端 + HTTP API，容器内监听 80）
+#        es01           : Elasticsearch 8.11.3，文档检索引擎（DOC_ENGINE=elasticsearch）
+#        mysql          : MySQL 8.0，存储元数据（租户、知识库、用户、助手配置等）
+#        minio          : MinIO 对象存储，存储上传的原始文档与切片图片
+#        redis          : Redis 7.2，任务队列（文档解析/Embedding 任务的 broker）
+#
+# 启动前必做（Linux 宿主机，Elasticsearch 的内核参数要求）：
+#   sudo sysctl -w vm.max_map_count=262144
+#   如需持久生效，写入 /etc/sysctl.conf 中追加一行 vm.max_map_count=262144
+#   （Windows + Docker Desktop 由 WSL2 虚拟机承载，无需手动设置）
+#
+# 常用命令（在 docker 目录下执行，Windows 也使用新版 docker compose 子命令）：
+#   docker compose up -d               # 启动全部服务
+#   docker compose ps                  # 查看运行状态
+#   docker compose logs -f ragflow     # 跟踪 RAGFlow 日志
+#   docker compose down                # 停止并删除容器（保留数据卷）
+#   docker compose down -v             # 停止并清空所有数据（危险操作）
+#
+# 启动后：
+#   浏览器访问 http://localhost:9380 注册账号（首个注册的账号自动成为管理员）
+#   其他服务调用 RAGFlow API 的地址为 http://localhost:9380
+# =============================================================================
+
+# 自定义网络：所有服务加入同一个 bridge 网络，容器之间通过服务名互访
+# （例如 ragflow 容器内通过 mysql:3306、es01:9000(HTTP) 访问依赖服务）
+networks:
+  ragflow_net:
+    name: ragflow_net
+    driver: bridge
+
+# 数据持久化卷：保证容器重建后数据不丢失
+volumes:
+  es_data:        # Elasticsearch 索引数据（知识库切片向量）
+  mysql_data:     # MySQL 数据库文件（元数据）
+  minio_data:     # MinIO 对象数据（原始文档、图片）
+  redis_data:     # Redis 持久化文件（队列状态）
+
+services:
+  # ---------------------------------------------------------------------------
+  # RAGFlow 主服务
+  # 说明：镜像内置了 Web 前端 + Python API Server + 任务执行器（task_executor）。
+  #       容器内部默认监听 80 端口（Web 页面与 REST API 是同一端口）。
+  # ---------------------------------------------------------------------------
+  ragflow:
+    image: infiniflow/ragflow:v0.26.0
+    container_name: ragflow
+    restart: unless-stopped
+    depends_on:
+      # 依赖的第三方服务必须先就绪，否则 ragflow 启动时会连接失败
+      es01:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ragflow_net
+    ports:
+      # 宿主机 9380 -> 容器 80，对外暴露 Web 页面与 HTTP API
+      - "9380:80"
+    volumes:
+      # 容器内的日志、配置生成结果需要持久化，便于排查问题
+      # 注意：Windows 宿主机建议把宿主机路径改成绝对路径（如 I:/wwwroot/.../docker/ragflow_logs）
+      - ./ragflow_logs:/ragflow/logs
+    environment:
+      # 时区设置为中国时区，保证日志与任务调度时间正确
+      - TZ=Asia/Shanghai
+      # 文档检索引擎类型：elasticsearch（可选 infinity，轻量但功能略少）
+      - DOC_ENGINE=elasticsearch
+      # Elasticsearch 连接信息（主机名使用 compose 服务名，端口为容器内部端口）
+      - ELASTIC_HOST=es01
+      - ELASTIC_PORT=9200
+      # MySQL 连接信息（用户名 root，库名由 RAGFlow 自动创建 rag_flow）
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=123456
+      # MinIO 连接信息（MinIO 提供兼容 S3 的 HTTP 接口，因此端口用 9000）
+      - MINIO_HOST=minio
+      - MINIO_PORT=9000
+      - MINIO_USER=rag_flow
+      - MINIO_PASSWORD=123456
+      # Redis 连接信息（任务队列）
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=123456
+      # HuggingFace 镜像地址：不设置时国内拉取 Embedding 模型会非常慢或失败
+      - HF_ENDPOINT=https://hf-mirror.com
+    # Elasticsearch 需要被高权限的内存映射，因此放开 ulimits 上限
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    # 反亲和性：避免 ragflow 与 es01 等高内存服务调度到同一宿主机（单机无影响）
+    # 该配置在单机 Docker 中不生效，仅在使用 Swarm 时有用，故此处省略
+
+  # ---------------------------------------------------------------------------
+  # Elasticsearch：RAGFlow 默认的文档检索引擎
+  # 说明：承担知识库切片（chunk）的向量检索与全文检索（BM25，支持中文分词）。
+  #       单节点模式下必须关闭安全认证（xpack.security.enabled=false），
+  #       因为 RAGFlow 未内置证书与账号体系进行访问。
+  # ---------------------------------------------------------------------------
+  es01:
+    image: elasticsearch:8.11.3
+    container_name: ragflow-es01
+    restart: unless-stopped
+    networks:
+      - ragflow_net
+    environment:
+      # 单节点集群发现配置
+      - discovery.type=single-node
+      # 关闭安全认证，允许 RAGFlow 直接以 http 访问
+      - xpack.security.enabled=false
+      # 指定 ES 初始管理员密码（安全关闭后不会被使用，保留以兼容官方模板）
+      - ELASTIC_PASSWORD=123456
+      # 关闭 X-Pack 机器学习相关功能，减少内存占用
+      - xpack.ml.enabled=false
+      # JVM 堆内存上限（建议为宿主机内存的 1/4，且不低于 1g）
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      # 关闭 bootstrap 检查，避免单节点模式下的告警日志
+      - bootstrap.memory_lock=false
+      - TZ=Asia/Shanghai
+    volumes:
+      # ES 索引与元数据持久化
+      - es_data:/usr/share/elasticsearch/data
+    ulimits:
+      # ES 需要较多的文件句柄与内存映射
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      # 通过集群健康接口判断 ES 是否真正可用，供 ragflow 的 depends_on 等待
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    # ES 端口仅用于调试，不需要对外暴露；如需在宿主机查看，取消下面两行注释
+    # ports:
+    #   - "1200:9200"
+
+  # ---------------------------------------------------------------------------
+  # MySQL：RAGFlow 元数据存储
+  # 说明：RAGFlow 首次启动时会自动连接 MySQL 并创建 rag_flow 库及其全部表结构，
+  #       因此这里通过 MYSQL_DATABASE 预先创建同名库，避免权限问题。
+  #       该库与你业务使用的 sdys-agent 库完全隔离，不会互相影响。
+  # ---------------------------------------------------------------------------
+  mysql:
+    image: mysql:8.0.39
+    container_name: ragflow-mysql
+    restart: unless-stopped
+    networks:
+      - ragflow_net
+    environment:
+      - TZ=Asia/Shanghai
+      # root 账号密码，必须与 ragflow 服务的 MYSQL_PASSWORD 保持一致
+      - MYSQL_ROOT_PASSWORD=123456
+      # 预创建的数据库名
+      - MYSQL_DATABASE=rag_flow
+    # 启动参数：提高最大连接数并统一使用 utf8mb4，避免中文富文本存储乱码
+    command:
+      - --max_connections=1000
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      # 使用 mysqladmin ping 判断数据库是否可接受连接
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-p123456", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 40s
+    # MySQL 端口默认不对宿主机暴露；如需用客户端连入调试，取消下面两行注释
+    # ports:
+    #   - "5455:3306"
+
+  # ---------------------------------------------------------------------------
+  # MinIO：兼容 S3 协议的对象存储
+  # 说明：存储用户上传的原始文档（PDF、Word、Excel 等）及解析后生成的图片切片。
+  #       9000 端口为 S3 API（RAGFlow 使用），9001 端口为 Web 控制台（人工排查用）。
+  # ---------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-05-28T17-19-04Z
+    container_name: ragflow-minio
+    restart: unless-stopped
+    networks:
+      - ragflow_net
+    environment:
+      - TZ=Asia/Shanghai
+      # 访问密钥与密钥对，必须与 ragflow 服务的 MINIO_USER/MINIO_PASSWORD 一致
+      - MINIO_ROOT_USER=rag_flow
+      - MINIO_ROOT_PASSWORD=123456
+    # MINIO_ROOT_USER 为该镜像新增的环境变量名，老版本使用 MINIO_ACCESS_KEY
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    ports:
+      # 9001 为控制台端口，便于浏览器登录查看桶内文件（账号密码同上）
+      - "9001:9001"
+    healthcheck:
+      # MinIO 官方镜像内置 mc 客户端，用 ready 检查确认服务已就绪
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Redis：任务队列
+  # 说明：RAGFlow 的文档解析、Embedding 计算等异步任务通过 Redis 分发，
+  #       由容器内的 task_executor 进程消费。开启 AOF 持久化避免任务丢失。
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7.2.4
+    container_name: ragflow-redis
+    restart: unless-stopped
+    networks:
+      - ragflow_net
+    environment:
+      - TZ=Asia/Shanghai
+    # 启动参数：开启 AOF 持久化 + 设置访问密码（与 ragflow 服务中的 REDIS_PASSWORD 一致）
+    command: redis-server --appendonly yes --requirepass 123456
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # 带密码执行 ping，返回 PONG 表示队列服务可用
+      test: ["CMD", "redis-cli", "-a", "123456", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s

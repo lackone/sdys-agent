@@ -8,9 +8,11 @@ dependencies = [
     "langchain>=1.4.9",
     "langchain-openai>=1.7.4",
     "langgraph>=1.2.20",
+    "mysql-connector-python>=26.10.0",
     "pydantic>=2.14.2",
     "python-dotenv>=1.2.4",
     "python-multipart>=0.0.33",
+    "reportlab>=5.1.0",
     "rich>=15.0.0",
     "tavily-python>=0.8.5",
 ]
