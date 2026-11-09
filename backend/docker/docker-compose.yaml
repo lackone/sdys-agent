@@ -90,7 +90,7 @@ services:
       - MINIO_HOST=minio
       - MINIO_PORT=9000
       - MINIO_USER=rag_flow
-      - MINIO_PASSWORD=123456
+      - MINIO_PASSWORD=12345678
       # Redis 连接信息（任务队列）
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -205,7 +205,7 @@ services:
       - TZ=Asia/Shanghai
       # 访问密钥与密钥对，必须与 ragflow 服务的 MINIO_USER/MINIO_PASSWORD 一致
       - MINIO_ROOT_USER=rag_flow
-      - MINIO_ROOT_PASSWORD=123456
+      - MINIO_ROOT_PASSWORD=12345678
     # MINIO_ROOT_USER 为该镜像新增的环境变量名，老版本使用 MINIO_ACCESS_KEY
     command: server /data --console-address ":9001"
     volumes:
